@@ -107,6 +107,33 @@ inputs:
     description: "When specified, the VM will be scheduled on host with specified CPU architecture or a newer one."
     default: AUTOMATIC
     required: true
+  create_disk:
+    description: Creates and attaches persistent disks to the instances; https://cloud.google.com/sdk/gcloud/reference/compute/instances/create#--[no-]enable-nested-virtualization
+    required: false
+  enable_nested_virtualization:
+    description: Enables nested virtualization on the instance.
+    default: false
+    required: true
+  metadata:
+    description: >
+      Metadata to be made available to the guest operating system running on the instances.
+      Should be a comma-separated list of key=value pairs.
+    required: false
+  network_interface:
+    description: Adds a network interface to the instance. Mutually exclusive with network flag.
+    required: false
+  provisioning_model:
+    description: Specifies the provisioning model for your VM instances.
+    default: STANDARD
+    required: true
+  reservation_affinity:
+    description: The type of reservation for the instance.
+    default: any
+    required: true
+  exa_next_version_core:
+    description: EXA Next Version Core
+    required: false
+
 outputs:
   label:
     description: >-
@@ -124,7 +151,7 @@ runs:
         --project_id=${{ inputs.project_id }}
         --service_account_key='${{ inputs.service_account_key }}'
         --runner_ver=${{ inputs.runner_ver }}
-        --vm_name_prefix=${{ inputs.vm_name_prefix }}
+        --vm_name_prefix=${{ inputs.vm_name_prefix }}-${{ inputs.exa_next_version_core }}
         --machine_zone=${{ inputs.machine_zone }}
         --machine_type=${{ inputs.machine_type }}
         --network=${{ inputs.network }}
@@ -145,4 +172,10 @@ runs:
         --maintenance_policy_terminate=${{ inputs.maintenance_policy_terminate }}
         --arm=${{ inputs.arm }}
         --min_cpu_platform='${{ inputs.min_cpu_platform }}'
+        --create_disk='${{ inputs.create_disk }}'
+        --enable_nested_virtualization=${{ inputs.enable_nested_virtualization }}
+        --metadata='${{ inputs.metadata }}'
+        --network_interface='${{ inputs.network_interface }}'
+        --provisioning_model='${{ inputs.provisioning_model }}'
+        --reservation_affinity='${{ inputs.reservation_affinity }}'
       shell: bash

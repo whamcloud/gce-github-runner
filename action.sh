@@ -42,6 +42,13 @@ maintenance_policy_terminate=
 arm=
 accelerator=
 min_cpu_platform_flag=
+create_disk=
+enable_nested_virtualization=
+metadata=
+network_interface=
+provisioning_model=
+reservation_affinity=
+
 
 OPTLIND=1
 while getopts_long :h opt \
@@ -71,6 +78,12 @@ while getopts_long :h opt \
   maintenance_policy_terminate optional_argument \
   accelerator optional_argument \
   min_cpu_platform optional_argument \
+  create_disk optional_argument \
+  enable_nested_virtualization required_argument \
+  metadata optional_argument \
+  network_interface optional_argument \
+  provisioning_model optional_argument \
+  reservation_affinity optional_argument \
   help no_argument "" "$@"
 do
   case "$opt" in
@@ -152,6 +165,24 @@ do
     min_cpu_platform)
       min_cpu_platform_flag=--min-cpu-platform="$OPTLARG"
       ;;
+    create_disk)
+      create_disk=$OPTLARG
+      ;;
+    enable_nested_virtualization)
+      enable_nested_virtualization=$OPTLARG
+      ;;
+    metadata)
+      metadata=$OPTLARG
+      ;;
+    network_interface)
+      network_interface=$OPTLARG
+      ;;
+    provisioning_model)
+      provisioning_model=$OPTLARG
+      ;;
+    reservation_affinity)
+      reservation_affinity=$OPTLARG
+      ;;
     h|help)
       usage
       exit 0
@@ -166,7 +197,7 @@ done
 
 function gcloud_auth {
   # NOTE: when --project is specified, it updates the config
-  echo ${service_account_key} | gcloud --project  ${project_id} --quiet auth activate-service-account --key-file - &>/dev/null
+  echo ${service_account_key} | gcloud --project  ${project_id} --quiet auth activate-service-account ${runner_service_account} --key-file - &>/dev/null
   echo "✅ Successfully configured gcloud."
 }
 
@@ -185,7 +216,7 @@ function start_vm {
       jq -r .token)
   echo "✅ Successfully got the GitHub Runner registration token"
 
-  VM_ID="${vm_name_prefix}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+  VM_ID="${vm_name_prefix//./-}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
   service_account_flag=$([[ -z "${runner_service_account}" ]] || echo "--service-account=${runner_service_account}")
   image_project_flag=$([[ -z "${image_project}" ]] || echo "--image-project=${image_project}")
   image_flag=$([[ -z "${image}" ]] || echo "--image=${image}")
@@ -199,6 +230,12 @@ function start_vm {
   subnet_flag=$([[ ! -z "${subnet}"  ]] && echo "--subnet=${subnet}" || echo "")
   accelerator=$([[ ! -z "${accelerator}"  ]] && echo "--accelerator=${accelerator} --maintenance-policy=TERMINATE" || echo "")
   maintenance_policy_flag=$([[ -z "${maintenance_policy_terminate}"  ]] || echo "--maintenance-policy=TERMINATE" )
+  create_disk_flag=$([[ ! -z "${create_disk}"  ]] && echo "--create-disk=${create_disk}" || echo "")
+  enable_nested_virtualization_flag=$([[ "${enable_nested_virtualization}" == "true" ]] && echo "--enable-nested-virtualization" || echo "--no-enable-nested-virtualization")
+  metadata_flag=$([[ ! -z "${metadata}"  ]] && echo "${metadata}" || echo "")
+  network_interface_flag=$([[ ! -z "${network_interface}"  ]] && echo "--network-interface=${network_interface}" || echo "")
+  provisioning_model_flag=$([[ ! -z "${provisioning_model}"  ]] && echo "--provisioning-model=${provisioning_model}" || echo "")
+  reservation_affinity_flag=$([[ ! -z "${reservation_affinity}"  ]] && echo "--reservation-affinity=${reservation_affinity}" || echo "")
 
   echo "The new GCE VM will be ${VM_ID}"
 
@@ -208,6 +245,13 @@ function start_vm {
   shutdown() {
     echo ❌ Machine setup failed so deleting $VM_ID in ${machine_zone} in ${shutdown_timeout} seconds ...
     sleep ${shutdown_timeout}
+    # Attempt to remove the runner
+    cd /actions-runner/
+    sudo ./svc.sh uninstall
+    sudo RUNNER_ALLOW_RUNASROOT=1 ./config.sh remove --token $(curl -S -s -XPOST \
+      -H "authorization: Bearer ${token}" \
+      https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runners/registration-token |\
+      jq -r .token) --unattended
     ${shutdown_command}
   }
   trap shutdown ERR
@@ -218,6 +262,13 @@ function start_vm {
 	cat <<-EOF > /etc/systemd/system/shutdown.sh
 	#!/bin/sh
 	sleep ${shutdown_timeout}
+	# Attempt to remove the runner
+	cd /actions-runner/
+	sudo ./svc.sh uninstall
+	sudo RUNNER_ALLOW_RUNASROOT=1 ./config.sh remove --token $(curl -S -s -XPOST \
+		-H "authorization: Bearer ${token}" \
+		https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runners/registration-token |\
+		jq -r .token) --unattended
 	${shutdown_command}
 	EOF
 
@@ -241,15 +292,21 @@ function start_vm {
 	systemctl start shutdown.service
 	EOF
 
+	sudo /usr/bin/dnf groupinstall -y \"Development Tools\"
+	sudo /usr/bin/dnf config-manager --set-enabled crb
+	sudo /usr/bin/dnf config-manager --add-repo https://rpm.releases.hashicorp.com/RHEL/hashicorp.repo
+
 	# See: https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/running-scripts-before-or-after-a-job
 	echo "ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/usr/bin/gce_runner_shutdown.sh" >.env
 	gcloud compute instances add-labels ${VM_ID} --zone=${machine_zone} --labels=gh_ready=0 && \\
 	RUNNER_ALLOW_RUNASROOT=1 ./config.sh --url https://github.com/${GITHUB_REPOSITORY} --token ${RUNNER_TOKEN} --labels ${VM_ID} --unattended ${ephemeral_flag} --disableupdate && \\
-	./svc.sh install && \\
-	./svc.sh start && \\
+	cd /actions-runner/ && \\
+	sudo ./svc.sh install && \\
+	sudo ./svc.sh start && \\
 	gcloud compute instances add-labels ${VM_ID} --zone=${machine_zone} --labels=gh_ready=1
-	# 3 days represents the max workflow runtime. This will shutdown the instance if everything else fails.
-	nohup sh -c \"sleep 3d && ${shutdown_command}\" > /dev/null &
+	sudo /actions-runner/runsvc.sh >/dev/null 2>&1 &
+	# 3h represents the max workflow runtime. This will shutdown the instance if everything else fails.
+	nohup sh -c \"sleep 3h && ${shutdown_command}\" > /dev/null &
   "
 
   if $actions_preinstalled ; then
@@ -314,6 +371,7 @@ function start_vm {
 
   gcloud compute instances create ${VM_ID} \
     --zone=${machine_zone} \
+    ${create_disk_flag} \
     ${disk_size_flag} \
     ${boot_disk_type_flag} \
     --machine-type=${machine_type} \
@@ -329,8 +387,12 @@ function start_vm {
     ${accelerator} \
     ${maintenance_policy_flag} \
     "${min_cpu_platform_flag}" \
+    ${enable_nested_virtualization_flag} \
     --labels=gh_ready=0,gh_repo_owner="${gh_repo_owner}",gh_repo="${gh_repo}",gh_run_id="${gh_run_id}" \
-    --metadata=startup-script="$startup_script" \
+    --metadata=startup-script="$startup_script",${metadata_flag} \
+    ${network_interface_flag} \
+    ${provisioning_model_flag} \
+    ${reservation_affinity_flag} \
     && echo "label=${VM_ID}" >> $GITHUB_OUTPUT
 
   safety_off
