@@ -296,11 +296,14 @@ function start_vm {
 	echo "ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/usr/bin/gce_runner_shutdown.sh" >.env
 	gcloud compute instances add-labels ${VM_ID} --zone=${machine_zone} --labels=gh_ready=0 && \\
 	RUNNER_ALLOW_RUNASROOT=1 ./config.sh --url https://github.com/${GITHUB_REPOSITORY} --token ${RUNNER_TOKEN} --labels ${VM_ID} --unattended ${ephemeral_flag} --disableupdate && \\
-	./svc.sh install && \\
-	./svc.sh start && \\
+	cd /actions-runner/ && \\
+	sudo chown -R root:root * && \\
+	sudo ./svc.sh install && \\
+	sudo ./svc.sh start && \\
+  sudo /actions-runner/runsvc.sh >/dev/null 2>&1 &
 	gcloud compute instances add-labels ${VM_ID} --zone=${machine_zone} --labels=gh_ready=1
-	# 3h represents the max workflow runtime. This will shutdown the instance if everything else fails.
-	nohup sh -c \"sleep 3h && ${shutdown_command}\" > /dev/null &
+	# 5m represents the max workflow runtime. This will shutdown the instance if everything else fails.
+	nohup sh -c \"sleep 5m && ${shutdown_command}\" > /dev/null &
   "
 
   if $actions_preinstalled ; then
