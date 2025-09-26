@@ -302,8 +302,11 @@ function start_vm {
 	sudo ./svc.sh start && \\
   sudo /actions-runner/runsvc.sh >/dev/null 2>&1 &
 	gcloud compute instances add-labels ${VM_ID} --zone=${machine_zone} --labels=gh_ready=1
-	# 5m represents the max workflow runtime. This will shutdown the instance if everything else fails.
-	nohup sh -c \"sleep 5m && ${shutdown_command}\" > /dev/null &
+	# 3h represents the max workflow runtime. This will shutdown the instance if everything else fails.
+	nohup sh -c \"sleep 3h && ${shutdown_command}\" > /dev/null &
+	sudo /usr/bin/dnf config-manager --set-enabled crb && \\
+	sudo /usr/bin/dnf config-manager --add-repo https://rpm.releases.hashicorp.com/RHEL/hashicorp.repo && \\
+	sudo /usr/bin/dnf groupinstall -y \"Development Tools\"
   "
 
   if $actions_preinstalled ; then
